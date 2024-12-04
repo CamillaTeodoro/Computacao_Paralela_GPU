@@ -1,52 +1,38 @@
-# Compila a versão sequencial por padrao
-VERSION = Sequencial
-CPP_COMPILER = mpic++ -std=c++11 -Wall -g
-CUDA_COMPILER = nvcc -std=c++11 -g
-SRC_DIR = srcSequencial
+# Compiladores
+NVCC = nvcc
+CXX = g++
 
-ifeq ($(VERSION),OpenMP)
-	SRC_DIR = srcOpenMP
-	CPP_COMPILER = mpic++ -std=c++11 -Wall -g -DNUM_THREADS=$(NUM_THREADS) -fopenmp
-else ifeq ($(VERSION),MPI)
-	SRC_DIR = srcMPI
-	CPP_COMPILER = mpic++ -std=c++11 -Wall -g -DNUM_THREADS=$(NUM_THREADS) -fopenmp
-else ifeq ($(VERSION),OpenMP_GPU)
-	SRC_DIR = srcOpenMP_GPU
-	CPP_COMPILER = mpic++ -std=c++11 -Wall -g -DNUM_THREADS=$(NUM_THREADS) -fopenmp
-else ifeq ($(VERSION),CUDA)
-	SRC_DIR = srcCUDA
-else
-	SRC_DIR = srcSequencial
-	CPP_COMPILER = mpic++ -std=c++11 -Wall -g
-endif
+# Flags de compilação
+CXXFLAGS = -Iinclude -O2 -fopenmp
+CXXFLAGS_GPU = -Iinclude -O2 -fopenmp -foffload=nvptx-none -fcf-protection=none
+NVCCFLAGS = -Iinclude -O2 -Xcompiler -fopenmp
 
-EXEC_PROG = neuralnetwork
-BINARIES = $(EXEC_PROG)
+# Diretórios
+SRC_CUDA = srcCuda
+SRC_CPP = srcOpenMP_GPU
+INCLUDE = include
 
-CPP_SOURCES := $(shell find $(SRC_DIR) -name '*.cpp')
-CU_SOURCES := $(shell find $(SRC_DIR) -name '*.cu')
+# Arquivos de saída
+CUDA_OUT = cuda_program
+CPP_OUT = cpp_program
+CPP_GPU_OUT = cpp_gpu_program
 
-CPP_OBJECTS = $(CPP_SOURCES:.cpp=.o)
-CU_OBJECTS = $(CU_SOURCES:.cu=.o)
+# Regras
+all: $(CUDA_OUT) $(CPP_OUT) $(CPP_GPU_OUT)
 
-OBJECTS = main.o $(CPP_OBJECTS) $(CU_OBJECTS)
+# Versão CUDA
+$(CUDA_OUT): main.cpp $(SRC_CUDA)/Network.cu $(SRC_CPP)/Dataset.cpp
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
 
-all: clean $(EXEC_PROG)
-	@echo Neural Network Build Completed
+# Versão OpenMP CPU
+$(CPP_OUT): main.cpp $(SRC_CPP)/Network.cpp $(SRC_CPP)/Dataset.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
-%.o: %.cpp
-	$(CPP_COMPILER) -c -o $@ $< -w
+# Versão OpenMP GPU
+$(CPP_GPU_OUT): main.cpp $(SRC_CPP)/Network.cpp $(SRC_CPP)/Dataset.cpp
+	$(CXX) $(CXXFLAGS_GPU) -o $@ $^
 
-%.o: %.cu
-	$(CUDA_COMPILER) -c -o $@ $< -w
-
-$(EXEC_PROG): $(OBJECTS)
-	$(CPP_COMPILER) -o $(EXEC_PROG) $(OBJECTS) 
-
-.PHONY : run
-run:
-	./$(EXEC_PROG)
-
-.PHONY : clean 
 clean:
-	rm -rf $(EXEC_PROG) $(shell find . -name '*.o')
+	rm -f $(CUDA_OUT) $(CPP_OUT) $(CPP_GPU_OUT)
+
+.PHONY: all clean

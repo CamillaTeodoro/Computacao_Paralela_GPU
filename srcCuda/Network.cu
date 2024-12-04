@@ -1,16 +1,25 @@
 #include "../include/Network.hpp"
 
+#ifdef NUM_THREADS
+#define THREADS NUM_THREADS
+#else
+#define THREADS 1
+#endif
+
 namespace Neural
 {
 
-    Network::Network() {}
-
-    Network::Network(vector<vector<double>> user_input, vector<vector<double>> user_output)
+    Network::Network()
     {
+        omp_set_num_threads(THREADS);
+    }
 
-        setInput(user_input);
-        setOutput(user_output);
+    Network::Network(double *user_input, double *user_output, int input_size, int output_size)
+    {
+        setInput(user_input, input_size, output_size);
+        setOutput(user_output, input_size, output_size);
         output_layer_size = 3;
+        omp_set_num_threads(THREADS);
     }
 
     void Network::setParameter(int user_max_epoch, int user_desired_percent, double user_error_tolerance, double user_learning_rate, int user_hidden_layer_size)
@@ -28,10 +37,10 @@ namespace Neural
 
     void Network::run()
     {
-
-        for (unsigned int data_row = 0; data_row < input.size(); data_row++)
+        for (int data_row = 0; data_row < output_rows; data_row++)
         {
-            ForwardPropagation forward = forwardPropagation(input[data_row]);
+            int input_start = data_row * input_layer_size;
+            ForwardPropagation forward = forwardPropagation(&input[input_start]);
             hitRateCount(forward.output, data_row);
         }
         hitRateCalculate();
@@ -39,142 +48,201 @@ namespace Neural
 
     void Network::trainingClassification()
     {
-
         for (epoch = 0; epoch < max_epoch && hit_percent < desired_percent; epoch++)
         {
-            for (unsigned int data_row = 0; data_row < input.size(); data_row++)
+            for (int data_row = 0; data_row < output_rows; data_row++)
             {
-                ForwardPropagation forward = forwardPropagation(input[data_row]);
-                backPropagation(forward, input[data_row], output[data_row]);
+                int input_start = data_row * input_layer_size;
+                int output_start = data_row * output_layer_size;
+
+                ForwardPropagation forward = forwardPropagation(&input[input_start]);
+                backPropagation(forward, &input[input_start], &output[output_start]);
             }
             run();
         }
 
-        cout << "Hidden Layer Size: " << hidden_layer_size
-             << "\tLearning Rate: " << learning_rate
-             << "\tHit Percent: " << hit_percent << "%"
-             << "\tEpoch: " << epoch << endl;
+        printf("Hidden Layer Size: %d\tLearning Rate: %f\tHit Percent: %d%%\tEpoch: %d\n",
+               hidden_layer_size, learning_rate, hit_percent, epoch);
     }
 
     void Network::autoTraining(int hidden_layer_limit, double learning_rate_increase)
     {
+        network global_best_network = best_network;
+        Network *this_ptr = this;
 
-        for (hidden_layer_size = 3; hidden_layer_size <= hidden_layer_limit; hidden_layer_size++)
+        // Calcula o número total de iterações
+        int num_hidden_layers = hidden_layer_limit - 2; // de 3 até hidden_layer_limit
+        int num_learning_rates = (int)(1.0 / learning_rate_increase);
+        int total_iterations = num_hidden_layers * num_learning_rates;
+
+        // Aloca arrays para armazenar resultados temporários
+        int *epochs = new int[total_iterations];
+        double *learning_rates = new double[total_iterations];
+        int *hidden_layers = new int[total_iterations];
+        double *temp_weights_input = new double[input_weight_size * total_iterations];
+        double *temp_weights_output = new double[output_weight_size * total_iterations];
+
         {
-            for (learning_rate = learning_rate_increase; learning_rate <= 1; learning_rate = learning_rate + learning_rate_increase)
+
+            for (int i = 3; i <= hidden_layer_limit; i++)
             {
-                initializeWeight();
-                trainingClassification();
-                if (epoch < best_network.epoch)
+                for (int j = 0; j < num_learning_rates; j++)
                 {
-                    best_network.epoch = epoch;
-                    best_network.learning_rate = learning_rate;
-                    best_network.hidden_layer = hidden_layer_size;
-                    best_network.weight_input = weight_input;
-                    best_network.weight_output = weight_output;
+                    double current_learning_rate = (j + 1) * learning_rate_increase;
+                    int idx = (i - 3) * num_learning_rates + j;
+
+                    Network local_network = *this_ptr;
+                    local_network.hidden_layer_size = i;
+                    local_network.learning_rate = current_learning_rate;
+                    local_network.initializeWeight();
+                    local_network.trainingClassification();
+
+                    // Armazena resultados nos arrays temporários
+                    epochs[idx] = local_network.epoch;
+                    learning_rates[idx] = current_learning_rate;
+                    hidden_layers[idx] = i;
+
+                    // Copia os pesos para os arrays temporários
+                    int weight_input_offset = idx * input_weight_size;
+                    int weight_output_offset = idx * output_weight_size;
+
+                    for (int k = 0; k < input_weight_size; k++)
+                    {
+                        temp_weights_input[weight_input_offset + k] = local_network.weight_input[k];
+                    }
+
+                    for (int k = 0; k < output_weight_size; k++)
+                    {
+                        temp_weights_output[weight_output_offset + k] = local_network.weight_output[k];
+                    }
                 }
             }
         }
 
-        cout << "Best Network --> Hidden Layer Size: " << best_network.hidden_layer
-             << "\tLearning Rate: " << best_network.learning_rate
-             << "\tEpoch: " << best_network.epoch << endl;
+        // Encontra o melhor resultado
+        int best_idx = 0;
+        for (int i = 1; i < total_iterations; i++)
+        {
+            if (epochs[i] < epochs[best_idx])
+            {
+                best_idx = i;
+            }
+        }
 
-        epoch = best_network.epoch;
-        learning_rate = best_network.learning_rate;
-        hidden_layer_size = best_network.hidden_layer;
-        weight_input = best_network.weight_input;
-        weight_output = best_network.weight_output;
+        // Atualiza a rede com os melhores parâmetros encontrados
+        epoch = epochs[best_idx];
+        learning_rate = learning_rates[best_idx];
+        hidden_layer_size = hidden_layers[best_idx];
+
+        // Copia os melhores pesos
+        int best_weight_input_offset = best_idx * input_weight_size;
+        int best_weight_output_offset = best_idx * output_weight_size;
+
+        memcpy(weight_input, &temp_weights_input[best_weight_input_offset],
+               input_weight_size * sizeof(double));
+        memcpy(weight_output, &temp_weights_output[best_weight_output_offset],
+               output_weight_size * sizeof(double));
+
+        std::cout << "Best Network --> Hidden Layer Size: " << hidden_layer_size
+                  << "\tLearning Rate: " << learning_rate
+                  << "\tEpoch: " << epoch << std::endl;
+
+        // Libera memória
+        delete[] epochs;
+        delete[] learning_rates;
+        delete[] hidden_layers;
+        delete[] temp_weights_input;
+        delete[] temp_weights_output;
     }
 
-    Network::ForwardPropagation Network::forwardPropagation(vector<double> input_line)
+    Network::ForwardPropagation Network::forwardPropagation(double *input_line)
     {
-
-        input_line.push_back(1); // bias
-
+        // Cria uma nova instância de ForwardPropagation
         ForwardPropagation forward(hidden_layer_size, output_layer_size);
 
-        // somatório dos produtos entre, entrada e peso das entradas em cada neurônio da camada oculta
+        // Calcula o somatório dos produtos entre entrada e pesos
         for (int i = 0; i < hidden_layer_size; i++)
         {
+            forward.sum_input_weight[i] = 0;
             for (int j = 0; j < input_layer_size; j++)
             {
-                forward.sum_input_weight[i] += input_line[j] * weight_input[j][i];
+                forward.sum_input_weight[i] += input_line[j] * weight_input[j * hidden_layer_size + i];
             }
         }
 
-        // aplica função de ativação, em cada somatório encontrado, ou em cada neurônio da camada oculta  (sigmoid)
+        // Aplica função de ativação
         for (int i = 0; i < hidden_layer_size; i++)
         {
-            forward.sum_input_weight_ativation.push_back(sigmoid(forward.sum_input_weight[i]));
+            forward.sum_input_weight_activation[i] = sigmoid(forward.sum_input_weight[i]);
         }
 
-        // somatório dos produtos entre, o somatório dos neurônios na camada oculta e o peso das saídas
+        // Calcula saídas
         for (int i = 0; i < output_layer_size; i++)
         {
+            forward.sum_output_weight[i] = 0;
             for (int j = 0; j < hidden_layer_size; j++)
             {
-                forward.sum_output_weigth[i] += forward.sum_input_weight_ativation[j] * weight_output[j][i];
+                forward.sum_output_weight[i] += forward.sum_input_weight_activation[j] *
+                                                weight_output[j * output_layer_size + i];
             }
+            forward.output[i] = sigmoid(forward.sum_output_weight[i]);
         }
 
-        // aplica função de ativação em cada somatório encontrado, ou em cada nerônio da camada de saída (sigmoidPrime), saída da rede neural
-        for (int i = 0; i < output_layer_size; i++)
-        {
-            forward.output.push_back(sigmoid(forward.sum_output_weigth[i]));
-        }
-
-        return forward;
+        return std::move(forward);
     }
 
-    void Network::backPropagation(ForwardPropagation forward, vector<double> input_line, vector<double> output_line)
+    void Network::backPropagation(ForwardPropagation &forward, double *input_line, double *output_line)
     {
+        double *delta_output = new double[output_layer_size];
+        double *delta_input = new double[hidden_layer_size];
 
-        input_line.push_back(1); // bias
-
-        BackPropagation back(hidden_layer_size);
-
-        // erro entre a saída esperada e a calculada, multiplicado pela taxa de mudança da função de ativação no somatório de saída (derivada)
+        // Calcula erro de saída
         for (int i = 0; i < output_layer_size; i++)
         {
-            back.delta_output_sum.push_back((output_line[i] - forward.output[i]) * sigmoidPrime(forward.sum_output_weigth[i]));
+            delta_output[i] = (output_line[i] - forward.output[i]) *
+                              sigmoidPrime(forward.sum_output_weight[i]);
         }
 
-        // erro da saída multiplicado pelos pesos de saída, aplicando a taxa de mudança da função de ativação no somatório da camada oculta (derivada)
+        // Calcula erro da camada oculta
+        for (int i = 0; i < hidden_layer_size; i++)
+        {
+            delta_input[i] = 0;
+            for (int j = 0; j < output_layer_size; j++)
+            {
+                delta_input[i] += delta_output[j] * weight_output[i * output_layer_size + j];
+            }
+            delta_input[i] *= sigmoidPrime(forward.sum_input_weight[i]);
+        }
+
+        // Atualiza pesos
         for (int i = 0; i < hidden_layer_size; i++)
         {
             for (int j = 0; j < output_layer_size; j++)
             {
-                back.delta_input_sum[i] += back.delta_output_sum[j] * weight_output[i][j];
-            }
-            back.delta_input_sum[i] *= sigmoidPrime(forward.sum_input_weight[i]);
-        }
-
-        // corrigindo os valores dos pesos de saída
-        for (unsigned int i = 0; i < weight_output.size(); i++)
-        {
-            for (unsigned int j = 0; j < weight_output[i].size(); j++)
-            {
-                weight_output[i][j] += back.delta_output_sum[j] * forward.sum_input_weight_ativation[i] * learning_rate;
+                weight_output[i * output_layer_size + j] += learning_rate *
+                                                            delta_output[j] * forward.sum_input_weight_activation[i];
             }
         }
 
-        // corrigindo os valores dos pesos de entrada
-        for (unsigned int i = 0; i < weight_input.size(); i++)
+        for (int i = 0; i < input_layer_size; i++)
         {
-            for (unsigned int j = 0; j < weight_input[i].size(); j++)
+            for (int j = 0; j < hidden_layer_size; j++)
             {
-                weight_input[i][j] += back.delta_input_sum[j] * input_line[i] * learning_rate;
+                weight_input[i * hidden_layer_size + j] += learning_rate *
+                                                           delta_input[j] * input_line[i];
             }
         }
+
+        delete[] delta_output;
+        delete[] delta_input;
     }
 
-    void Network::hitRateCount(vector<double> neural_output, unsigned int data_row)
+    void Network::hitRateCount(double *neural_output, unsigned int data_row)
     {
-
         for (int i = 0; i < output_layer_size; i++)
         {
-            if (abs(neural_output[i] - output[data_row][i]) < error_tolerance)
+            // Acessa o output linearizado usando data_row * output_layer_size + i
+            if (abs(neural_output[i] - output[data_row * output_layer_size + i]) < error_tolerance)
                 correct_output++;
         }
     }
@@ -182,34 +250,31 @@ namespace Neural
     void Network::hitRateCalculate()
     {
 
-        hit_percent = (correct_output * 100) / (output.size() * output_layer_size);
+        hit_percent = (correct_output * 100) / (output_rows * output_layer_size);
         correct_output = 0;
     }
 
     void Network::initializeWeight()
     {
+        input_weight_size = input_layer_size * hidden_layer_size;
+        output_weight_size = hidden_layer_size * output_layer_size;
 
-        weight_input.resize(input_layer_size);
-        weight_output.resize(hidden_layer_size);
+        // Aloca memória para os arrays
+        weight_input = new double[input_weight_size];
+        weight_output = new double[output_weight_size];
 
         srand((unsigned int)time(0));
 
-        for (unsigned int i = 0; i < weight_input.size(); i++)
+        // Inicializa os pesos de entrada
+        for (int i = 0; i < input_weight_size; i++)
         {
-            weight_input[i].clear();
-            for (int j = 0; j < hidden_layer_size; j++)
-            {
-                weight_input[i].push_back(((double)rand() / (RAND_MAX)));
-            }
+            weight_input[i] = ((double)rand() / (RAND_MAX));
         }
 
-        for (unsigned int i = 0; i < weight_output.size(); i++)
+        // Inicializa os pesos de saída
+        for (int i = 0; i < output_weight_size; i++)
         {
-            weight_output[i].clear();
-            for (int j = 0; j < output_layer_size; j++)
-            {
-                weight_output[i].push_back(((double)rand() / (RAND_MAX)));
-            }
+            weight_output[i] = ((double)rand() / (RAND_MAX));
         }
 
         hit_percent = 0;
@@ -251,16 +316,30 @@ namespace Neural
         error_tolerance = e;
     }
 
-    void Network::setInput(vector<vector<double>> i)
+    void Network::setInput(double *i, int rows, int cols)
     {
-        input = i;
-        input_layer_size = i[0].size() + 1; // +1 bias
+        input = new double[rows * cols];
+        memcpy(input, i, rows * cols * sizeof(double));
+        input_layer_size = cols + 1; // +1 para bias
     }
 
-    void Network::setOutput(vector<vector<double>> o)
+    void Network::setOutput(double *o, int rows, int cols)
     {
-        output = o;
-        output_layer_size = o[0].size();
+        output_rows = rows; // Armazena o número de linhas
+        output = new double[rows * cols];
+        for (int j = 0; j < rows * cols; j++)
+        {
+            output[j] = o[j];
+        }
+        output_layer_size = cols;
+    }
+
+    Network::~Network()
+    {
+        delete[] input;
+        delete[] output;
+        delete[] weight_input;
+        delete[] weight_output;
     }
 
 }
