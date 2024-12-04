@@ -3,8 +3,8 @@ NVCC = nvcc
 CXX = g++
 
 # Flags de compilação
-CXXFLAGS = -Iinclude -O2 -fopenmp
-CXXFLAGS_GPU = -Iinclude -O2 -fopenmp -foffload=nvptx-none -fcf-protection=none
+CXXFLAGS = -Iinclude -O2 -fopenmp -g
+CXXFLAGS_GPU = -Iinclude -O2 -fopenmp -foffload=nvptx-none -fno-lto -g
 NVCCFLAGS = -Iinclude -O2 -Xcompiler -fopenmp
 
 # Diretórios

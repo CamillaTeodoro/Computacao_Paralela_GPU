@@ -13,29 +13,37 @@ namespace Neural
     class Network
     {
 
+#pragma omp declare target
         struct ForwardPropagation
         {
-            double *sum_input_weight;            // Armazena a soma dos produtos entre as entradas e os pesos das entradas para cada neurônio na camada oculta
-            double *sum_output_weight;           // Armazena a soma dos produtos entre as saídas da camada oculta e os pesos de saída para cada neurônio na camada de saída
-            double *sum_input_weight_activation; // Armazena o resultado da função de ativação aplicada ao sum_input_weight
-            double *output;                      // Armazena a saída final da rede neural
+            static const int MAX_SIZE = 1000;
+            double sum_input_weight[MAX_SIZE];
+            double sum_output_weight[MAX_SIZE];
+            double sum_input_weight_activation[MAX_SIZE];
+            double output[MAX_SIZE];
+            int input_size;
+            int output_size;
 
+            // Construtor padrão necessário para mapeamento
+            ForwardPropagation() : input_size(0), output_size(0) {}
+
+            // Construtor com parâmetros
             ForwardPropagation(int size_input, int size_output)
             {
-                sum_input_weight = new double[size_input]();
-                sum_output_weight = new double[size_output]();
-                sum_input_weight_activation = new double[size_input]();
-                output = new double[size_output]();
-            }
+                input_size = size_input;
+                output_size = size_output;
 
-            ~ForwardPropagation()
-            {
-                delete[] sum_input_weight;
-                delete[] sum_output_weight;
-                delete[] sum_input_weight_activation;
-                delete[] output;
+                // Inicializa os arrays com zero
+                for (int i = 0; i < MAX_SIZE; i++)
+                {
+                    sum_input_weight[i] = 0.0;
+                    sum_output_weight[i] = 0.0;
+                    sum_input_weight_activation[i] = 0.0;
+                    output[i] = 0.0;
+                }
             }
         };
+#pragma omp end declare target
 
         struct network
         {
@@ -76,23 +84,21 @@ namespace Neural
     public:
 #pragma omp declare target
         Network();
-
-        void initializeWeight();
-        void trainingClassification();
-#pragma omp end declare target
-        void autoTraining(int, double);
-        void run();
-        Network(double *, double *, int, int);
-
         ~Network();
-        void hitRateCount(double *, unsigned int);
-        void hitRateCalculate();
-
-        ForwardPropagation forwardPropagation(double *);
+        void initializeWeight();
+        void run();
+        void forwardPropagation(double *input_line, ForwardPropagation &forward);
         void backPropagation(ForwardPropagation &, double *, double *);
 
         double sigmoid(double);
         double sigmoidPrime(double);
+        void hitRateCount(double *, unsigned int);
+        void hitRateCalculate();
+        void trainOneEpoch();
+#pragma omp end declare target
+        void trainingClassification();
+        void autoTraining(int, double);
+        Network(double *, double *, int, int);
 
         void setInput(double *, int, int);
         void setOutput(double *, int, int);

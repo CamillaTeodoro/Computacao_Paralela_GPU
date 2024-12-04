@@ -13,6 +13,14 @@ namespace Neural
     {
         omp_set_num_threads(THREADS);
     }
+
+    Network::~Network()
+    {
+        delete[] input;
+        delete[] output;
+        delete[] weight_input;
+        delete[] weight_output;
+    }
 #pragma omp end declare target
 
     Network::Network(double *user_input, double *user_output, int input_size, int output_size)
@@ -36,35 +44,46 @@ namespace Neural
         initializeWeight();
     }
 
+#pragma omp declare target
     void Network::run()
     {
         for (int data_row = 0; data_row < output_rows; data_row++)
         {
             int input_start = data_row * input_layer_size;
-            ForwardPropagation forward = forwardPropagation(&input[input_start]);
+            ForwardPropagation forward;
+            forwardPropagation(&input[input_start], forward);
             hitRateCount(forward.output, data_row);
         }
         hitRateCalculate();
     }
+#pragma omp end declare target
 
-#pragma omp declare target
     void Network::trainingClassification()
     {
-        for (epoch = 0; epoch < max_epoch && hit_percent < desired_percent; epoch++)
+        epoch = 0;
+        while (epoch < max_epoch && hit_percent < desired_percent)
         {
-            for (int data_row = 0; data_row < output_rows; data_row++)
-            {
-                int input_start = data_row * input_layer_size;
-                int output_start = data_row * output_layer_size;
-
-                ForwardPropagation forward = forwardPropagation(&input[input_start]);
-                backPropagation(forward, &input[input_start], &output[output_start]);
-            }
-            run();
+            trainOneEpoch();
+            epoch++;
         }
 
         printf("Hidden Layer Size: %d\tLearning Rate: %f\tHit Percent: %d%%\tEpoch: %d\n",
                hidden_layer_size, learning_rate, hit_percent, epoch);
+    }
+
+#pragma omp declare target
+    void Network::trainOneEpoch()
+    {
+        for (int data_row = 0; data_row < output_rows; data_row++)
+        {
+            int input_start = data_row * input_layer_size;
+            int output_start = data_row * output_layer_size;
+
+            ForwardPropagation forward;
+            forwardPropagation(&input[input_start], forward);
+            backPropagation(forward, &input[input_start], &output[output_start]);
+        }
+        run();
     }
 #pragma omp end declare target
 
@@ -104,7 +123,11 @@ namespace Neural
                     local_network.hidden_layer_size = i;
                     local_network.learning_rate = current_learning_rate;
                     local_network.initializeWeight();
-                    local_network.trainingClassification();
+
+                    for (int e = 0; e < max_epoch && local_network.hit_percent < desired_percent; e++)
+                    {
+                        local_network.trainOneEpoch();
+                    }
 
                     // Armazena resultados nos arrays temporários
                     epochs[idx] = local_network.epoch;
@@ -165,11 +188,11 @@ namespace Neural
         delete[] temp_weights_input;
         delete[] temp_weights_output;
     }
-
-    Network::ForwardPropagation Network::forwardPropagation(double *input_line)
+#pragma omp declare target
+    void Network::forwardPropagation(double *input_line, ForwardPropagation &forward)
     {
-        // Cria uma nova instância de ForwardPropagation
-        ForwardPropagation forward(hidden_layer_size, output_layer_size);
+        forward.input_size = hidden_layer_size;
+        forward.output_size = output_layer_size;
 
         // Calcula o somatório dos produtos entre entrada e pesos
         for (int i = 0; i < hidden_layer_size; i++)
@@ -198,14 +221,12 @@ namespace Neural
             }
             forward.output[i] = sigmoid(forward.sum_output_weight[i]);
         }
-
-        return std::move(forward);
     }
 
     void Network::backPropagation(ForwardPropagation &forward, double *input_line, double *output_line)
     {
-        double *delta_output = new double[output_layer_size];
-        double *delta_input = new double[hidden_layer_size];
+        double delta_output[ForwardPropagation::MAX_SIZE];
+        double delta_input[ForwardPropagation::MAX_SIZE];
 
         // Calcula erro de saída
         for (int i = 0; i < output_layer_size; i++)
@@ -243,11 +264,7 @@ namespace Neural
                                                            delta_input[j] * input_line[i];
             }
         }
-
-        delete[] delta_output;
-        delete[] delta_input;
     }
-
     void Network::hitRateCount(double *neural_output, unsigned int data_row)
     {
         for (int i = 0; i < output_layer_size; i++)
@@ -264,7 +281,7 @@ namespace Neural
         hit_percent = (correct_output * 100) / (output_rows * output_layer_size);
         correct_output = 0;
     }
-#pragma omp declare target
+
     void Network::initializeWeight()
     {
         input_weight_size = input_layer_size * hidden_layer_size;
@@ -291,7 +308,6 @@ namespace Neural
         hit_percent = 0;
         correct_output = 0;
     }
-#pragma omp end declare target
     double Network::sigmoid(double z)
     {
         return 1 / (1 + exp(-z));
@@ -301,6 +317,7 @@ namespace Neural
     {
         return exp(-z) / (pow(1 + exp(-z), 2));
     }
+#pragma omp end declare target
 
     void Network::setMaxEpoch(int m)
     {
@@ -343,14 +360,6 @@ namespace Neural
             output[j] = o[j];
         }
         output_layer_size = cols;
-    }
-
-    Network::~Network()
-    {
-        delete[] input;
-        delete[] output;
-        delete[] weight_input;
-        delete[] weight_output;
     }
 
 }
