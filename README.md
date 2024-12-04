@@ -40,7 +40,7 @@ Certifique-se de ter configurado as dependências necessárias para a execução
 1. **Compilador C/C++**: Necessário para compilar o código em qualquer versão. Recomendado `gcc` ou `g++`.
 2. **Make**: Utilizado para gerenciar a compilação do projeto.
 3. **OpenMP**: Necessário para a versão paralela com OpenMP. Geralmente incluído no `gcc` (versão 4.2 ou superior).
-4. **MPI (Message Passing Interface)**: Necessário para a versão distribuída com MPI. Recomendado `MPICH` ou `OpenMPI`.
+4. **CUDA**: Necessário para a versão para GPU. Pode se instalado com sudo apt install nvidia-cuda-toolkit (Linux) ou baixado no site https://developer.nvidia.com/cuda-toolkit
 
 ## Explicação da Aplicação
 ### Dataset: Iris

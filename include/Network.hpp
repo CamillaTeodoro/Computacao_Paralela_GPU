@@ -5,7 +5,6 @@
 #include <math.h>
 #include <vector>
 #include <omp.h>
-#include <mpi.h>
 
 using namespace std;
 
@@ -77,11 +76,10 @@ namespace Neural
         double error_tolerance; // Tolerância de erro para considerar uma previsão como correta
 
     public:
-
-		static bool mpi_finalized;
+        static bool mpi_finalized;
 
         Network();
-		// ~Network();
+        // ~Network();
         Network(vector<vector<double>>, vector<vector<double>>);
 
         void run();
