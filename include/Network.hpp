@@ -24,16 +24,8 @@ namespace Neural
             int input_size;
             int output_size;
 
-            // Construtor padrão necessário para mapeamento
-            ForwardPropagation() : input_size(0), output_size(0) {}
-
-            // Construtor com parâmetros
-            ForwardPropagation(int size_input, int size_output)
+            ForwardPropagation() : input_size(0), output_size(0)
             {
-                input_size = size_input;
-                output_size = size_output;
-
-                // Inicializa os arrays com zero
                 for (int i = 0; i < MAX_SIZE; i++)
                 {
                     sum_input_weight[i] = 0.0;
@@ -41,6 +33,12 @@ namespace Neural
                     sum_input_weight_activation[i] = 0.0;
                     output[i] = 0.0;
                 }
+            }
+
+            ForwardPropagation(int size_input, int size_output) : ForwardPropagation()
+            {
+                input_size = size_input;
+                output_size = size_output;
             }
         };
 #pragma omp end declare target
@@ -84,7 +82,6 @@ namespace Neural
     public:
 #pragma omp declare target
         Network();
-        ~Network();
         void initializeWeight();
         void run();
         void forwardPropagation(double *input_line, ForwardPropagation &forward);
@@ -96,9 +93,10 @@ namespace Neural
         void hitRateCalculate();
         void trainOneEpoch();
 #pragma omp end declare target
+        ~Network();
         void trainingClassification();
         void autoTraining(int, double);
-        Network(double *, double *, int, int);
+        Network(double *, double *, int, int, int, int);
 
         void setInput(double *, int, int);
         void setOutput(double *, int, int);

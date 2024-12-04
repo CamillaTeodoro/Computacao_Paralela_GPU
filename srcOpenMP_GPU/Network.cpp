@@ -11,24 +11,74 @@ namespace Neural
 #pragma omp declare target
     Network::Network()
     {
+        input = nullptr;
+        output = nullptr;
+        weight_input = nullptr;
+        weight_output = nullptr;
         omp_set_num_threads(THREADS);
     }
 
+#pragma omp end declare target
     Network::~Network()
     {
-        delete[] input;
-        delete[] output;
-        delete[] weight_input;
-        delete[] weight_output;
+        std::cout << "Destrutor: Iniciando..." << std::endl;
+        if (input != nullptr)
+        {
+            delete[] input;
+            input = nullptr;
+        }
+        if (output != nullptr)
+        {
+            delete[] output;
+            output = nullptr;
+        }
+        if (weight_input != nullptr)
+        {
+            delete[] weight_input;
+            weight_input = nullptr;
+        }
+        if (weight_output != nullptr)
+        {
+            delete[] weight_output;
+            weight_output = nullptr;
+        }
+        std::cout << "Destrutor: Finalizado" << std::endl;
     }
-#pragma omp end declare target
 
-    Network::Network(double *user_input, double *user_output, int input_size, int output_size)
+    Network::Network(double *user_input, double *user_output, int input_rows, int input_cols, int output_rows, int output_cols)
     {
-        setInput(user_input, input_size, output_size);
-        setOutput(user_output, input_size, output_size);
-        output_layer_size = 3;
-        omp_set_num_threads(THREADS);
+        input = nullptr;
+        output = nullptr;
+        weight_input = nullptr;
+        weight_output = nullptr;
+        std::cout << "Construtor: Iniciando..." << std::endl;
+
+        try
+        {
+            std::cout << "Construtor: Configurando input..." << std::endl;
+            setInput(user_input, input_rows, input_cols);
+
+            std::cout << "Construtor: Configurando output..." << std::endl;
+            setOutput(user_output, output_rows, output_cols);
+
+            std::cout << "Construtor: Configurando output_layer_size..." << std::endl;
+            output_layer_size = output_cols;
+
+            std::cout << "Construtor: Configurando threads..." << std::endl;
+            omp_set_num_threads(THREADS);
+
+            std::cout << "Construtor: Finalizado" << std::endl;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Erro no construtor: " << e.what() << std::endl;
+            throw;
+        }
+        catch (...)
+        {
+            std::cerr << "Erro desconhecido no construtor" << std::endl;
+            throw;
+        }
     }
 
     void Network::setParameter(int user_max_epoch, int user_desired_percent, double user_error_tolerance, double user_learning_rate, int user_hidden_layer_size)
@@ -93,22 +143,30 @@ namespace Neural
         Network *this_ptr = this;
 
         // Calcula o número total de iterações
-        int num_hidden_layers = hidden_layer_limit - 2; // de 3 até hidden_layer_limit
+        int num_hidden_layers = hidden_layer_limit - 2;
         int num_learning_rates = (int)(1.0 / learning_rate_increase);
         int total_iterations = num_hidden_layers * num_learning_rates;
 
-        // Aloca arrays para armazenar resultados temporários
-        int *epochs = new int[total_iterations];
-        double *learning_rates = new double[total_iterations];
-        int *hidden_layers = new int[total_iterations];
-        double *temp_weights_input = new double[input_weight_size * total_iterations];
-        double *temp_weights_output = new double[output_weight_size * total_iterations];
+        // Aloca e inicializa arrays
+        int *epochs = new int[total_iterations]();
+        double *learning_rates = new double[total_iterations]();
+        int *hidden_layers = new int[total_iterations]();
+        double *temp_weights_input = new double[input_weight_size * total_iterations]();
+        double *temp_weights_output = new double[output_weight_size * total_iterations]();
 
-#pragma omp target data map(to : this_ptr[0 : 1])                         \
-    map(tofrom : epochs[0 : total_iterations],                            \
-            learning_rates[0 : total_iterations],                         \
-            hidden_layers[0 : total_iterations],                          \
-            temp_weights_input[0 : input_weight_size * total_iterations], \
+        // Copia os dados necessários para arrays que serão mapeados para a GPU
+        double *device_input = new double[input_layer_size * output_rows];
+        double *device_output = new double[output_layer_size * output_rows];
+        memcpy(device_input, input, input_layer_size * output_rows * sizeof(double));
+        memcpy(device_output, output, output_layer_size * output_rows * sizeof(double));
+
+#pragma omp target data map(to : this_ptr[0 : 1],                                   \
+                                device_input[0 : input_layer_size * output_rows],   \
+                                device_output[0 : output_layer_size * output_rows]) \
+    map(tofrom : epochs[0 : total_iterations],                                      \
+            learning_rates[0 : total_iterations],                                   \
+            hidden_layers[0 : total_iterations],                                    \
+            temp_weights_input[0 : input_weight_size * total_iterations],           \
             temp_weights_output[0 : output_weight_size * total_iterations])
         {
 #pragma omp target teams distribute parallel for collapse(2)
@@ -119,41 +177,71 @@ namespace Neural
                     double current_learning_rate = (j + 1) * learning_rate_increase;
                     int idx = (i - 3) * num_learning_rates + j;
 
-                    Network local_network = *this_ptr;
-                    local_network.hidden_layer_size = i;
-                    local_network.learning_rate = current_learning_rate;
-                    local_network.initializeWeight();
+                    // Configura parâmetros locais
+                    int local_hidden_size = i;
+                    double local_learning_rate = current_learning_rate;
+                    int local_epoch = 0;
+                    int local_hit_percent = 0;
 
-                    for (int e = 0; e < max_epoch && local_network.hit_percent < desired_percent; e++)
+                    // Inicializa pesos locais
+                    double *local_weight_input = new double[input_weight_size];
+                    double *local_weight_output = new double[output_weight_size];
+
+                    // Inicializa pesos aleatórios
+                    for (int k = 0; k < input_weight_size; k++)
                     {
-                        local_network.trainOneEpoch();
+                        local_weight_input[k] = ((double)rand() / RAND_MAX);
+                    }
+                    for (int k = 0; k < output_weight_size; k++)
+                    {
+                        local_weight_output[k] = ((double)rand() / RAND_MAX);
                     }
 
-                    // Armazena resultados nos arrays temporários
-                    epochs[idx] = local_network.epoch;
-                    learning_rates[idx] = current_learning_rate;
-                    hidden_layers[idx] = i;
+                    // Treina a rede
+                    while (local_epoch < max_epoch && local_hit_percent < desired_percent)
+                    {
+                        // Treina uma época
+                        for (int data_row = 0; data_row < output_rows; data_row++)
+                        {
+                            int input_start = data_row * input_layer_size;
+                            int output_start = data_row * output_layer_size;
 
-                    // Copia os pesos para os arrays temporários
+                            ForwardPropagation forward;
+                            forwardPropagation(&device_input[input_start], forward);
+                            backPropagation(forward, &device_input[input_start], &device_output[output_start]);
+                        }
+                        local_epoch++;
+                    }
+
+                    // Salva resultados
+                    epochs[idx] = local_epoch;
+                    learning_rates[idx] = local_learning_rate;
+                    hidden_layers[idx] = local_hidden_size;
+
+                    // Copia pesos
                     int weight_input_offset = idx * input_weight_size;
                     int weight_output_offset = idx * output_weight_size;
 
 #pragma omp parallel for
                     for (int k = 0; k < input_weight_size; k++)
                     {
-                        temp_weights_input[weight_input_offset + k] = local_network.weight_input[k];
+                        temp_weights_input[weight_input_offset + k] = local_weight_input[k];
                     }
 
 #pragma omp parallel for
                     for (int k = 0; k < output_weight_size; k++)
                     {
-                        temp_weights_output[weight_output_offset + k] = local_network.weight_output[k];
+                        temp_weights_output[weight_output_offset + k] = local_weight_output[k];
                     }
+
+                    // Libera memória local
+                    delete[] local_weight_input;
+                    delete[] local_weight_output;
                 }
             }
         }
 
-        // Encontra o melhor resultado
+        // Encontra melhor resultado
         int best_idx = 0;
         for (int i = 1; i < total_iterations; i++)
         {
@@ -163,23 +251,21 @@ namespace Neural
             }
         }
 
-        // Atualiza a rede com os melhores parâmetros encontrados
+        // Atualiza rede com melhores parâmetros
         epoch = epochs[best_idx];
         learning_rate = learning_rates[best_idx];
         hidden_layer_size = hidden_layers[best_idx];
 
-        // Copia os melhores pesos
+        // Copia melhores pesos
         int best_weight_input_offset = best_idx * input_weight_size;
         int best_weight_output_offset = best_idx * output_weight_size;
-
         memcpy(weight_input, &temp_weights_input[best_weight_input_offset],
                input_weight_size * sizeof(double));
         memcpy(weight_output, &temp_weights_output[best_weight_output_offset],
                output_weight_size * sizeof(double));
 
-        std::cout << "Best Network --> Hidden Layer Size: " << hidden_layer_size
-                  << "\tLearning Rate: " << learning_rate
-                  << "\tEpoch: " << epoch << std::endl;
+        printf("Best Network --> Hidden Layer Size: %d\tLearning Rate: %f\tEpoch: %d\n",
+               hidden_layer_size, learning_rate, epoch);
 
         // Libera memória
         delete[] epochs;
@@ -187,7 +273,10 @@ namespace Neural
         delete[] hidden_layers;
         delete[] temp_weights_input;
         delete[] temp_weights_output;
+        delete[] device_input;
+        delete[] device_output;
     }
+
 #pragma omp declare target
     void Network::forwardPropagation(double *input_line, ForwardPropagation &forward)
     {
@@ -287,19 +376,30 @@ namespace Neural
         input_weight_size = input_layer_size * hidden_layer_size;
         output_weight_size = hidden_layer_size * output_layer_size;
 
+        // Liberar memória anterior se existir
+        if (weight_input != nullptr)
+        {
+            delete[] weight_input;
+            weight_input = nullptr;
+        }
+        if (weight_output != nullptr)
+        {
+            delete[] weight_output;
+            weight_output = nullptr;
+        }
+
         // Aloca memória para os arrays
         weight_input = new double[input_weight_size];
         weight_output = new double[output_weight_size];
 
         srand((unsigned int)time(0));
 
-        // Inicializa os pesos de entrada
+        // Inicializa os pesos
         for (int i = 0; i < input_weight_size; i++)
         {
             weight_input[i] = ((double)rand() / (RAND_MAX));
         }
 
-        // Inicializa os pesos de saída
         for (int i = 0; i < output_weight_size; i++)
         {
             weight_output[i] = ((double)rand() / (RAND_MAX));
@@ -308,6 +408,7 @@ namespace Neural
         hit_percent = 0;
         correct_output = 0;
     }
+
     double Network::sigmoid(double z)
     {
         return 1 / (1 + exp(-z));
@@ -346,20 +447,69 @@ namespace Neural
 
     void Network::setInput(double *i, int rows, int cols)
     {
-        input = new double[rows * cols];
-        memcpy(input, i, rows * cols * sizeof(double));
-        input_layer_size = cols + 1; // +1 para bias
+        std::cout << "setInput: Iniciando (rows=" << rows << ", cols=" << cols << ")" << std::endl;
+
+        try
+        {
+            if (i == nullptr)
+            {
+                throw std::runtime_error("Input array is null");
+            }
+
+            input = new double[rows * cols];
+            if (input == nullptr)
+            {
+                throw std::runtime_error("Failed to allocate input array");
+            }
+
+            std::cout << "setInput: Copiando dados..." << std::endl;
+            for (int j = 0; j < rows * cols; j++)
+            {
+                input[j] = i[j];
+            }
+
+            input_layer_size = cols + 1; // +1 para bias
+            std::cout << "setInput: Finalizado (input_layer_size=" << input_layer_size << ")" << std::endl;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Erro em setInput: " << e.what() << std::endl;
+            throw;
+        }
     }
 
     void Network::setOutput(double *o, int rows, int cols)
     {
-        output_rows = rows; // Armazena o número de linhas
-        output = new double[rows * cols];
-        for (int j = 0; j < rows * cols; j++)
+        std::cout << "setOutput: Iniciando (rows=" << rows << ", cols=" << cols << ")" << std::endl;
+
+        try
         {
-            output[j] = o[j];
+            if (o == nullptr)
+            {
+                throw std::runtime_error("Output array is null");
+            }
+
+            output_rows = rows;
+            output = new double[rows * cols];
+            if (output == nullptr)
+            {
+                throw std::runtime_error("Failed to allocate output array");
+            }
+
+            std::cout << "setOutput: Copiando dados..." << std::endl;
+            for (int j = 0; j < rows * cols; j++)
+            {
+                output[j] = o[j];
+            }
+
+            output_layer_size = cols;
+            std::cout << "setOutput: Finalizado (output_layer_size=" << output_layer_size << ")" << std::endl;
         }
-        output_layer_size = cols;
+        catch (const std::exception &e)
+        {
+            std::cerr << "Erro em setOutput: " << e.what() << std::endl;
+            throw;
+        }
     }
 
 }

@@ -72,7 +72,13 @@ int main(int argc, char *argv[])
 		double taxa_de_aprendizado = 0.25;
 
 		std::cout << "Criando rede neural..." << std::endl;
-		Neural::Network neural_network(input_array, output_array, input_rows, output_rows);
+		Neural::Network neural_network(
+			input_array,
+			output_array,
+			input_rows,
+			input_cols,
+			output_rows,
+			output_cols);
 
 		std::cout << "Configurando parâmetros..." << std::endl;
 		neural_network.setParameter(
