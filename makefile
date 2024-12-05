@@ -1,10 +1,14 @@
+# Valores padrão
+NUM_TEAMS ?= 4
+NUM_THREADS ?= 32
+
 # Compiladores
 NVCC = nvcc
 CXX = g++
 
 # Flags de compilação
-CXXFLAGS = -Iinclude -O2 -fopenmp -g
-CXXFLAGS_GPU = -Iinclude -O2 -fopenmp -foffload=nvptx-none -fno-lto -g
+CXXFLAGS = -Iinclude -O2 -fopenmp -DNUM_TEAMS=$(NUM_TEAMS) -DNUM_THREADS=$(NUM_THREADS)
+CXXFLAGS_GPU = -Iinclude -O2 -fopenmp -foffload=nvptx-none -fno-lto -DNUM_TEAMS=$(NUM_TEAMS) -DNUM_THREADS=$(NUM_THREADS)
 NVCCFLAGS = -Iinclude -O2 -Xcompiler -fopenmp
 
 # Diretórios
